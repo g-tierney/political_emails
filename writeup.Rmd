@@ -14,6 +14,8 @@ knitr::opts_chunk$set(echo = F,
                       warning = FALSE,
                       fig.align="center")
 
+directory <- "/Users/grahamtierney/Dropbox (Personal)/Blog Posts/political_emails/output"
+
 kable_output_format <- "html"
 
 require(tidytext)
@@ -28,7 +30,7 @@ require(wordcloud)
 ### Load Data ###
 #################
 
-emails_simple <- read_csv("output/emails_simple.csv")
+emails_simple <- read_csv(str_c(directory,"/emails_simple.csv"))
 
 head(emails_simple)
 
@@ -68,11 +70,12 @@ One fateful day while I was bored during a lecture, I decided to sign up for ema
 
 #The Data
 
-I signed up using a new email address, and only filled out the required fields to get on mailing lists. I used my real name, the zip code 00000, and a phone number of all zeros. The data for what information I gave to each campaign is on Github. I felt kind of bad signing up for volunteer lists with false information, which were the only email option for some campaigns. The data turned out to be pretty interesting though, so I think next cycle for the presidential election I will try to get on a more comprehensive set of emails by signing up for the House races too and providing zip codes and phone numbers in the relevant district. 
+I signed up using a new email address, and only filled out the required fields to get on mailing lists. I used my real name, the zip code 00000, and a phone number of all zeros. The data for what information I gave to each campaign is on Github. I felt kind of bad signing up for volunteer lists with false information, which were the only email option for some campaigns. The data turned out to be pretty interesting though, so I think next cycle for the presidential election I will try to get on a more comprehensive set of emails by signing up for the House races too and providing zip codes and phone numbers in the relevant district.[^data]
 
-I found the candidates and campaign websites from [RealClearPolitics's Senate map](https://www.realclearpolitics.com/epolls/2018/senate/2018_elections_senate_map.html). I started signing up for emails on 6/6/2018, but didn't sign up for every senate race until 10/9/2018. In the last month before the election (October 6 through November 6 inclusive) I received `r nrow(emails_simple %>% filter(last_month)) %>% format_number()` emails from `r unique(emails_simple %>% filter(last_month) %>% select(Organization)) %>% nrow()` unique campaigns. Some campaigns did not have an option to signup for an email list on their website and some may have filtered out my email address because the zip code and/or phone number were clearly not accurate. Much of the analysis below compares emails from Democrats and Republicans, so I further filter the emails down to races where I received at least one email from both party's candidates. The final number is `r nrow(emails_simple %>% filter(last_month,both_parties)) %>% format_number()` emails and `r unique(emails_simple %>% filter(last_month,both_parties) %>% select(Organization)) %>% nrow()` campaigns. Most analysis uses this sample, and I will specify when that is not the case.[^data]
+[^data]: The code and data are on Github here: https://github.com/g-tierney/political_emails. 
 
-[^data]: The code will be posted on Github eventually, but I am willing to provide the data by request. 
+I found the candidates and campaign websites from [RealClearPolitics's Senate map](https://www.realclearpolitics.com/epolls/2018/senate/2018_elections_senate_map.html). I started signing up for emails on 6/6/2018, but didn't sign up for every senate race until 10/9/2018. In the last month before the election (October 6 through November 6 inclusive) I received `r nrow(emails_simple %>% filter(last_month)) %>% format_number()` emails from `r unique(emails_simple %>% filter(last_month) %>% select(Organization)) %>% nrow()` unique campaigns. Some campaigns did not have an option to signup for an email list on their website and some may have filtered out my email address because the zip code and/or phone number were clearly not accurate. Much of the analysis below compares emails from Democrats and Republicans, so I further filter the emails down to races where I received at least one email from both party's candidates. The final number is `r nrow(emails_simple %>% filter(last_month,both_parties)) %>% format_number()` emails and `r unique(emails_simple %>% filter(last_month,both_parties) %>% select(Organization)) %>% nrow()` campaigns. Most analysis uses this sample, and I will specify when that is not the case.
+
 
 #Who is sending emails and when?
 
@@ -461,4 +464,6 @@ Emails with higher positive average sentiment, or more sadness and anger words a
 
 #Further Work
 
-The classification and cross-validation methods that I used are certainly simpler versions of where the state of the art is. I would not be surprised if more information could be extracted from the text or the sentiments with more sophisticated tools. Something that I haven't explored, but could be quite interesting, is using the text itself rather than the sentiment to classify emails. The difficulty is that text data is very high dimensional: there were far more unique words used than emails sent, so you could get a perfect in-sample prediction if the explanatory variables are just indicators for the presence or absence of each word. There are also some words that are very predictive, but not predictive in an "interesting" way. Emails always mention the candidate's name, frequently include a link to the campaign's donation page or list their mailing address. Clearly, you can immediately know the party of the sender from those features. But those predictions are also not very interesting. What I would like to do is extract from the emails some measures of the general language each party uses and then use those features to classify the email. If those features classify accurately, then there is evidence for divergence in how the parties speak to their supporters. That result has implications for trying to convince people to change their political beliefs. Presenting convincing arguments to partisans of each party probably requires speaking their language in some sense, and campaign emails are potentially a useful data source for learning that language.  
+The classification and cross-validation methods that I used are certainly simpler versions of where the state of the art is. I would not be surprised if more information could be extracted from the text or the sentiments with more sophisticated tools. Something that I haven't explored, but could be quite interesting, is using the text itself rather than the sentiment to classify emails. The difficulty is that text data is very high dimensional: there were far more unique words used than emails sent. Regression with more variables than observations tends to overfit the estimation data and produce poor out-of-sample predictions. There are also some words that are very predictive, but not predictive in an "interesting" way. Emails always mention the candidate's name, frequently include a link to the campaign's donation page or list their mailing address. Clearly, you can immediately know the party of the sender from those features. But those predictions are also not very interesting. 
+
+With unlimited time and resources, what I would like to do is extract from the emails some measures of the general language each party uses and then use those features to classify the email. If those features classify accurately, then there is evidence for divergence in how the parties speak to their supporters. That result has implications for trying to convince people to change their political beliefs and how to talk to people from across the isle. Presenting convincing arguments to partisans of each party probably requires speaking their language in some sense, and campaign emails are potentially a useful data source for learning that language.  
