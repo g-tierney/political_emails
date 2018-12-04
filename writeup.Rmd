@@ -1,0 +1,464 @@
+---
+title: "What About the Emails?"
+author: "Graham Tierney"
+date: "12/3/2018"
+output: html_document
+always_allow_html: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F,
+                      cache = T,
+                      warning = FALSE,
+                      fig.align="center")
+
+kable_output_format <- "html"
+
+require(tidytext)
+require(tidyverse)
+require(kableExtra)
+require(wordcloud)
+
+```
+
+```{r load_clean, include = FALSE}
+#################
+### Load Data ###
+#################
+
+emails_simple <- read_csv("output/emails_simple.csv")
+
+head(emails_simple)
+
+#####################
+### Data Cleaning ###
+#####################
+
+emails_simple <- emails_simple %>% 
+  mutate(Party = if_else(Organization == "Bernie Sanders","D",Party),
+         datetimestamp = as.Date(datetimestamp))
+
+#standardize graph parameters
+party_color <- scale_color_manual(breaks = c("D","R"),
+                                  values = c("blue","red")) 
+party_fill <- scale_fill_manual(breaks = c("D","R"),
+                                values = c("blue","red"))
+
+#states with both parties
+emails_simple <- left_join(emails_simple,
+                           emails_simple %>% group_by(District) %>% 
+                              summarise(both_parties = length(unique(Party)) == 2)
+                           )
+#emails within last month
+emails_simple <- emails_simple %>% 
+  mutate(last_month = as.Date("2018-10-06") <= datetimestamp & datetimestamp < as.Date("2018-11-07"))
+
+format_number <- function(x){
+  format(x,big.mark=",",scientific=FALSE)
+}
+```
+
+#The Project
+
+One fateful day while I was bored during a lecture, I decided to sign up for email messages from each Senate campaign during the 2018 election cycle.[^title] A lot of people study the impact of political advertisements on various outcomes, and I thought some interesting trends might emerge in the email blasts that campaigns send out. 
+
+[^title]: This project may have been entierly inspired by the fact that I really liked the title. 
+
+#The Data
+
+I signed up using a new email address, and only filled out the required fields to get on mailing lists. I used my real name, the zip code 00000, and a phone number of all zeros. The data for what information I gave to each campaign is on Github. I felt kind of bad signing up for volunteer lists with false information, which were the only email option for some campaigns. The data turned out to be pretty interesting though, so I think next cycle for the presidential election I will try to get on a more comprehensive set of emails by signing up for the House races too and providing zip codes and phone numbers in the relevant district. 
+
+I found the candidates and campaign websites from [RealClearPolitics's Senate map](https://www.realclearpolitics.com/epolls/2018/senate/2018_elections_senate_map.html). I started signing up for emails on 6/6/2018, but didn't sign up for every senate race until 10/9/2018. In the last month before the election (October 6 through November 6 inclusive) I received `r nrow(emails_simple %>% filter(last_month)) %>% format_number()` emails from `r unique(emails_simple %>% filter(last_month) %>% select(Organization)) %>% nrow()` unique campaigns. Some campaigns did not have an option to signup for an email list on their website and some may have filtered out my email address because the zip code and/or phone number were clearly not accurate. Much of the analysis below compares emails from Democrats and Republicans, so I further filter the emails down to races where I received at least one email from both party's candidates. The final number is `r nrow(emails_simple %>% filter(last_month,both_parties)) %>% format_number()` emails and `r unique(emails_simple %>% filter(last_month,both_parties) %>% select(Organization)) %>% nrow()` campaigns. Most analysis uses this sample, and I will specify when that is not the case.[^data]
+
+[^data]: The code will be posted on Github eventually, but I am willing to provide the data by request. 
+
+#Who is sending emails and when?
+
+I received emails from both parties in the following states: `r unique(emails_simple$District[emails_simple$both_parties & emails_simple$last_month]) %>% sort()`. A notable omission is West Virginia, where I only received emails from Joe Manchin. Below I show the number of emails I received each day from each party. 
+
+```{r who_emails}
+
+emails_simple %>% filter(both_parties == T & last_month == T) %>% 
+  group_by(datetimestamp,Party) %>% 
+  summarise(total = n()) %>% 
+  ggplot(aes(x=datetimestamp,y=total,fill = Party,color = Party)) + 
+  geom_col() + 
+  party_color + party_fill + 
+  xlab("Date") + ylab("Total Emails") + ggtitle("Emails by Date") + 
+  theme(plot.title = element_text(hjust = .5),plot.subtitle = element_text()) 
+```
+
+What immediately jumped out to me was that the democratic candidates send significantly more emails (and for some reason campaigns send the fewest emails on Wednesdays). Next, I tally the number of emails I received from each candidate, and show the races where I received at least 100 emails in total. 
+
+```{r sender_counts,echo = F}
+emails_simple %>% filter(both_parties & last_month) %>% 
+  group_by(District,Party,Organization) %>% 
+  summarise(`Total Emails` = n()) %>% 
+  group_by(District) %>% 
+  mutate(total = sum(`Total Emails`)) %>% arrange(-total) %>% filter(total>100) %>% 
+  select(-total) %>% 
+  rename(State = District,Campaign = Organization) %>% 
+  kable(format = kable_output_format) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+Jacky Rosen, Bill Nelson, Claire McCaskill, Heidi Heitkamp, and Joe Donnely (all democrats)  sent over 100 emails during the relevant time-frame. Dean Heller was the only republican who sent me over 100 emails. In general, Democrats sent more emails than their Republican opponents. However, I certainly would not be surprised if my sample was biased. People who signed up with in-state addresses probably received more emails than I did. I don't know how sophisticated campaigns are with targeting their emails, but I would be shocked if they did not focus efforts like Get Out the Vote campaigns on people with addresses in their district. I do wonder, though, if there is a connection between the fundraising strategies and email strategies of each party. If Democrats rely more on smaller donations from many individuals, they might need to send more emails to everyone who expresses interest in their campaign. Republicans who either self-fund or court fewer donations from wealthier individuals might simply not have much to gain from emailing out-of-state individuals. 
+
+#Email Content
+
+```{r word_clouds, echo= F}
+
+emails_text <- emails_simple %>% 
+  filter(last_month & both_parties) %>% 
+  filter(parsed_text != "parse failure")
+
+max.words <- 50
+scale <- c(1,10)
+set.seed(2)
+par(mfrow = c(1,2),
+    mar = c(1,1,1,1))
+emails_text %>%
+  filter(Party == "D") %>%
+  unnest_tokens(word,parsed_text) %>%
+  inner_join(get_sentiments("nrc"),by = "word") %>%
+  count(word) %>%
+  with(wordcloud(word,n,max.words = max.words))
+title("Democratic Emails")
+
+emails_text %>%
+  filter(Party == "R") %>%
+  unnest_tokens(word,parsed_text) %>%
+  inner_join(get_sentiments("nrc"),by = "word") %>%
+  count(word) %>%
+  with(wordcloud(word,n,max.words = max.words))
+title("Repblican Emails")
+par(mfrow = c(1,1))
+```
+
+Next, I will analyze the content of the emails. The word clouds above show each word sized proportionally to the amount of times it was used in the email. Both party's emails frequently used words like senate, vote, and fight, but some differences are already apparent. Here I do unfortunately need to filter the dataset down more. Many of the emails that were sent came in a format that did not download or parse into human-readable text well. I tried to extract the text from all emails, but some (particularly ones with odd formatting or with pictures of text) I could not parse properly. The number of emails analyzed in this section is only `r nrow(emails_text) %>% format_number()`. 
+
+Word clouds are a useful visualization, but I will use a statistical technique, the relative risk ratio, to characterize the difference in word-usage between Republican and Democratic emails. 
+
+```{r word_counts,echo = F}
+
+#,fig.cap="Note: When the proportion is less than one (the word is more common in republican emails), the value reported is the oposite of the inverse. Words are only included if they are used in emails by both parties."
+
+###################
+### Word Counts ###
+###################
+
+signed_words <- c("afinn", "bing", "nrc", "loughran") %>% 
+  map(~get_sentiments(.) %>% dplyr::select("word"))  %>% do.call(what = rbind) %>% 
+  unique
+
+token_counts <- emails_text %>% filter(both_parties == T) %>% 
+                unnest_tokens(output = token,input = parsed_text,token = "words") %>% 
+                mutate(token = str_replace_all(token,"[^a-zA-Z]","")) %>% #remove punctuation
+                group_by(Party,token) %>% summarize(n_emails = length(unique(email_id)),
+                                                    n = n()) %>% 
+                group_by(token) %>% mutate(word_total = sum(n),
+                                           email_total = sum(n_emails)) %>% ungroup() %>% 
+                arrange(-n)
+
+#drop some tokens
+cutoff <- 5
+token_counts <- token_counts %>% 
+  filter(!(token %in% c("zwnj","zw","27195","89126","09to","2c","atabase",
+                        "320","a0here","hereif","20003the","ie","a9"))) %>% 
+  filter(word_total>cutoff)
+
+#add totals
+token_counts <- left_join(token_counts,
+                          emails_simple %>% filter(both_parties == T) %>% 
+                            group_by(Party) %>% 
+                            summarise(total_party_emails=length(unique(email_id))),by="Party") %>% 
+                left_join(token_counts %>% 
+                            group_by(Party) %>% 
+                            summarise(total_party_words = sum(n)),by="Party") %>% 
+                mutate(freq = n/word_total) %>% 
+                bind_tf_idf(token,Party,n)
+
+#plot email proportion ratio
+token_ratios <- full_join(token_counts %>% filter(Party == "D") %>% 
+                  mutate(dem_ratio = n_emails/total_party_emails) %>% 
+                  select(token,dem_ratio,dem_n = n_emails,dem_total = total_party_emails),
+                token_counts %>% filter(Party == "R") %>% 
+                  mutate(rep_ratio = n_emails/total_party_emails) %>% 
+                  select(token,rep_ratio,rep_n = n_emails,rep_total = total_party_emails),
+                by = c("token")) %>% 
+      mutate(risk_ratio = dem_ratio/rep_ratio)
+
+cutoff <- 1
+rbind(token_ratios %>% filter(rep_n >= cutoff,dem_n >= cutoff) %>% top_n(15,risk_ratio),
+      token_ratios %>% filter(rep_n >= cutoff,dem_n >= cutoff) %>% top_n(15,-risk_ratio)) %>% 
+  arrange(-risk_ratio) %>% 
+  mutate(risk_ratio = if_else(risk_ratio<1,-1/risk_ratio,risk_ratio),
+         Party = if_else(risk_ratio>1,"D","R"),
+         token = factor(token, levels = rev(unique(token)))) %>% 
+  ggplot(aes(token,risk_ratio,fill = Party)) + 
+  geom_col() + 
+  coord_flip() + 
+  party_color + party_fill +
+  labs(y = "Proportion of Democratic Emails / Proportion of Republican Emails", x = "",
+       title = "Relative Risk Ratios") + 
+  theme(plot.caption = element_text(hjust = 0),
+        plot.title = element_text(hjust = .5))
+
+#function to get ratios for reporting
+get_ratio <- function(data,word,party,round = 2){
+  data[data$token == word & !is.na(data$token),str_c(party,"_ratio")]
+}
+
+```
+
+The chart above merits some further explanation. For each word, I calculated the proportion of Democratic emails that used the word and the proportion of Republican emails that used the word. Then, I took the ratio of those two quantities, often referred to as the relative risk ratio. To put everything on a comparable scale, if Republican emails used the word more frequently, I multiplied the proportion by -1 and took the inverse. So if the ratio is equal to R and positive, then Democratic emails used the word R times more frequently. If the ratio is equal to R and negative, then Republican emails used the word R times more frequently. I show the 15 words with the largest ratio for each party.[^token_parsing]
+
+[^token_parsing]: I also removed all non-alphanumeric characters from each word. 
+
+Something that I noticed quickly is that election-specific terms from races where the Democrat sent many more emails than the Republican have high risk ratios: "Las Vegas", "Scott" (Bill Nelson referring to his opponent Rick Scott), and "FL" are all in the top 15 for democrats. "ActBlue" is an organization that helps Democrats fundraise. "politicalemaild" is a truncated version of the email address I provided to campaigns. 
+
+I was not surprised that the words "borders" and "conservative" are in the top for Republicans, but I was quite surprised by "web" and "website" showing up in the top 15. "Liberal" is used frequently as a pejorative by Republicans, but apparently Democrats do not use the word anywhere near as frequently when messaging their own supporters. 
+
+Of course, words that are used by one party and never used by the other will have a risk ratio of plus or minus infinity. The problem with looking at all of those words is that they often are spelling or parsing errors that happen once or twice for one party and never for the other. To account for that, I show only the 10 most frequently used words that are never used by the opposing party. 
+
+```{r zero_words}
+drop_words <- c("ahere")
+na_to_zero <- function(x){
+  ifelse(is.na(x),0,x)
+}
+
+zeros_display <- token_ratios %>% 
+  mutate_if(is.numeric,na_to_zero) %>% 
+  filter(dem_n == 0 | rep_n == 0) %>% 
+  filter(!(token %in% drop_words)) %>% 
+  mutate(rr_signed = case_when(risk_ratio<1 ~ -1/risk_ratio,
+                               TRUE ~ risk_ratio),
+         rr_signed = ifelse(rr_signed == 0 | rr_signed == -Inf,NA,rr_signed)) 
+
+zeros_display %>% 
+  {rbind(top_n(.,10,dem_n),top_n(.,10,rep_n))} %>% 
+  arrange(-dem_n,-rep_n) %>% 
+  select(token,dem_n,dem_ratio,rep_n,rep_ratio) %>% 
+  kable(format = kable_output_format,digits = 3,
+        col.names = c("Word",
+                      "Emails Using Word","Proportion Using Word",
+                      "Emails Using Word","Proportion Using Word")) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F) %>% 
+  add_header_above(c(" ","Democratic" = 2,"Republican"=2))
+```
+
+Again, "Florida's" and "Nelson" show up as top democratic words never used by republicans because I received many emails from Bill Nelson's campaign and almost none from Rick Scott's. I was surprised that no Republican emails used the word "you'd." One potential explanation is that Democrats use more personal apeals in their emails, which is further evidenced by the fact that Democrats used my email address more than republicans. Democrats referenced "Silver's" "FiveThirtyEight" website in over 200 emails, while Republicans never mentioned either him or the website.  
+
+Besides the words that are used most differently, I was also curious how some specific words showed up in emails. Below I tabulate the usage of a few select words. Specifically, I was interested in which politicians get mentioned by each party, some campaign issues, and party signifiers. 
+
+```{r interesting_words, echo = F}
+interesting_words <- c("trump","obama","pelosi","mcconnell","caravan","kavanaugh","radical","conservative","liberal","progressive")
+polling_words <- c("fivethirtyeight","poll","polls","polling")
+
+token_ratios_display <- token_ratios %>% filter(token %in% interesting_words) %>% 
+  mutate_if(is.numeric,na_to_zero) %>% 
+  mutate(rr_signed = case_when(risk_ratio<1 ~ -1/risk_ratio,
+                               TRUE ~ risk_ratio),
+         rr_signed = ifelse(rr_signed == 0 | rr_signed == -Inf,NA,rr_signed)) 
+
+token_ratios_display %>% 
+  select(token,dem_n,dem_ratio,rep_n,rep_ratio,rr_signed) %>% 
+  .[map(interesting_words,function(x) which(x == token_ratios_display$token)) %>% unlist,] %>% 
+  kable(format = kable_output_format,digits = 3,
+        col.names = c("Word",
+                      "Emails Using Word","Proportion Using Word",
+                      "Emails Using Word","Proportion Using Word",
+                      "Signed Risk Ratio")) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F) %>% 
+  add_header_above(c(" ","Democratic" = 2,"Republican"=2," "))
+```
+
+While Trump and Obama were mentioned in about 30\% of emails by both Democrats and Republicans, congressional leaders were almost exclusively mentioned by the opposing party. Democrats mentioned Mitch McConnell in about 16.5\% of their emails, while he was never mentioned by Republicans. Republicans mentioned Nancy Pelosi in about 9\% of their emails, while she was mentioned in only 0.5\% of democratic emails. This seems to lend truth to the impression I got from news coverage that Republicans ran against Pelosi and Democrats ran against McConnell. 
+
+#Email Sentiment
+
+How did the sentiment of emails differ by party? Here I will rely on some of the built-in dictionaries in the `tidytext` package in R. Sentiment analysis generally refers to matching each word with some sentiment, either on a positive or negative scale or to some (short) list of topics. A review of the dictionaries that I will be using is [here](https://www.tidytextmining.com/sentiment.html#the-sentiments-dataset). 
+
+The simplest way to find the sentiment of a document is to use a dictionary that maps words to whether they express a positive or negative sentiment, give each positive word a weight of +1 and each negative word a weight of -1, then find the average for each document. The chart below does just that. Note that the bounds are at plus or minus 1 because I only take the average over words with a sentiment attached to them. 
+
+```{r pos_neg_sentiments,echo=F}
+
+score_email <- function(data){
+  unnested <- data %>% unnest_tokens(word,parsed_text)
+  
+  #numeric score
+  numeric <- unnested %>% 
+    inner_join(get_sentiments("bing"),by="word") %>% 
+    group_by(email_id) %>% 
+    summarise(average_score = if_else(sentiment == "positive",1,-1) %>% mean) %>% 
+    mutate(average_score = if_else(is.na(average_score),0,average_score))
+  
+  #categorical score
+  word_count <- unnested %>% 
+    inner_join(get_sentiments("nrc") %>% 
+    group_by(word) %>% filter(row_number() == 1),by="word") %>% 
+    group_by(email_id) %>% 
+    summarize(n_sentiment_words = n()) %>% 
+    select(email_id,n_sentiment_words)
+  
+  categorical <- unnested %>% 
+    inner_join(get_sentiments("nrc"),by="word") %>% 
+    group_by(email_id) %>% 
+    mutate(n_words = n()) %>% 
+    count(sentiment)  %>% 
+    spread(sentiment,n,fill = 0) %>% 
+    left_join(word_count,by="email_id") %>% 
+    mutate_at(vars(anger:trust),funs(./n_sentiment_words))
+  
+  full_join(numeric,categorical,by="email_id")
+}
+emails_sentiment <- full_join(emails_text,
+                              score_email(emails_text[,c("email_id","parsed_text")]),
+                              by = "email_id")
+
+emails_sentiment %>% 
+  ggplot(aes(x=average_score,stat(density),color = Party,fill=Party)) + 
+  geom_histogram(alpha = .5,bins = 30) +
+  facet_wrap(~ Party) + 
+  ggtitle("Positive and Nevative Sentiment") + 
+  xlab("Email Sentiment") + 
+  party_color + party_fill
+
+```
+
+I plotted a density histogram because I received many more democratic than republican emails. The total area of the bars is scaled to sum to one for each party. The results look pretty interesting. For both parties, the distribution of sentiment is concentrated at 0.5, which corresponds to emails that use 75\% positive words and 25\% negative words. Democratic emails are more concentrated at this value, and the sentiment of Republican emails is more spread out with additional concentrations at plus or minus 1 (all positive or all negative words). 
+
+```{r set_sentiments}
+sentiments <- get_sentiments("nrc") %>% select(sentiment) %>% unique %>% unlist
+```
+
+Next I try a slightly more complicated sentiment analysis. I use a dictionary that maps words to (potentially multiple) of the following sentiments: `r str_c(c(sentiments[-10],"and anticipation"), collapse = ", ")`. Then, I calculate the proportion of words with the given sentiment among words that had any sentiment for each email and plot a histogram of the results. There are a lot of charts below, but I think they all tell the same story. The overall sentiment of the words used by each party are extremely similar. If all you knew about a campaign email was the sentiment score reported below, it would be extremely hard to correctly guess the party of the candidate.    
+
+```{r categorical_sentiment, echo = F}
+
+plot_sentiment <- function(x,data=emails_sentiment){
+  emails_sentiment %>% 
+    mutate(Party = ifelse(Party == "D","Democrat","Republican")) %>% 
+    ggplot(aes_string(x=x,"stat(density)",color = "Party",fill="Party")) + 
+    geom_histogram(alpha = .5,bins = 20) +
+    facet_wrap(~ Party) + 
+    ggtitle(str_c("Proportion of Words that are ",str_to_title(x)," Words")) + 
+    party_color + party_fill + 
+    guides(fill = FALSE, color = FALSE)
+}
+
+sentiment_plots <- map(sentiments,~plot_sentiment(x = .,
+                                                  data = emails_sentiment %>% filter(!is.na(n_sentiment_words))))
+
+for(i in 0:4){         
+  sentiment_plots[((2*i+1):(2*i + 2))] %>% 
+    gridExtra::grid.arrange(grobs = .,nrow = 2) 
+}
+```
+
+#Classification
+
+Overall, it looks like certain words can give away the political alignment of the email, but the sentiment cannot. However, that conclusion just comes from examining the histograms. A more sophisticated method to measure how well sentiment can identify political text is to fit a prediction model, then test how well it works on a held-out set. If the information about sentiment improves predictive power, then there is evidence that the parties speak to their supporters differently. A recent working paper by Gentzcow, Shapiro, and Taddy measure political polarization by how accurately speeches on the floor of Congress can identify the partisan alignment of the speaker.[^gst_paper] The classification accuracy results here can be interpreted similarly. I will use the two most straightforward techniques that I know of for this task: logistic regression and leave-one-out cross validation (LOOCV). 
+
+[^gst_paper]: The full article can be found [here](https://www.nber.org/papers/w22423.pdf). 
+
+Logistic regression is a standard method to fit a model to a binary outcome. What I want to do is estimate the probability that an email is from a Democrat as a function of the sentiment scores. A linear relationship will not work because probabilities need to be between zero and one. Logistic regression assumes that the log of the odds of an event (the probability of an email being Democratic divided by the probability of the email being Republican) is a linear function of the explanatory variables. Because of this change in perspective, interpreting the coefficients of a logistic regression is a little bit harder.[^logit_coef] It is still the case, however, that positive coefficients mean an increase in the explanatory variable is associated with an increase in the probability that the dependent variable equals one, so the interpretation of the *sign* of the coefficient remains the same. 
+
+[^logit_coef]: Technically, a one unit increase in the explanatory variable increases the odds that an event occurs by $e^\beta$ where $\beta$ is the estimated logit coefficient. 
+
+Leave-one-out cross-validation is an evaluation method where a model is fit on all data points except one, then the model is asked to predict the value at the held-out data point, and finally the prediction and observed value are compared. In my application, I code the event that an email comes from a democratic campaign as a one and the event that an email comes from a republican campaign as a zero. If the model predicts that an email is from a Democratic campaign with probability greater than 0.5, I classify it as a Democratic email and as a Republican email otherwise. The LOOCV error rate is the number of miss-classified emails divided by the number of emails.  
+
+The explanatory variables I use are all the variables charted above (the average of positive and negative sentiment, called "Email Sentiment", and each of the categorical sentiments) and the number of sentiment words in each email. To see if results were being driven by a single sentiment, I fit a univariate model with each term individually and a full model with all of the variables included. The results of the univaraite regressions are shown below. 
+
+```{r logit_fitting}
+emails_sentiment <- emails_sentiment %>% mutate(dem = Party == "D") 
+
+loocv_logit <- function(data,formula){
+  data <- data %>% filter(!is.na(n_sentiment_words) & !is.na(average_score))
+  n <- nrow(data)
+  fitted_probs <- map(1:n,
+    ~ glm(formula,data = data %>% filter(row_number() != .x),family = binomial(link = "logit")) %>% 
+        predict(object = .,newdata = data[.x,],type = "response")) %>% 
+    unlist %>% as.vector()
+  predictions <- fitted_probs %>% round(digits = 0)
+  sum(abs(predictions - data$dem[1:n]*1))/n
+}  
+
+classification_data <- emails_sentiment %>% 
+  filter(!is.na(n_sentiment_words) & !is.na(average_score))
+
+vars <- c("average_score",sentiments,"n_sentiment_words")
+univariate_models <- vars %>% map(~glm(data = classification_data,formula = str_c("dem ~ ",.)))
+loo_error_rates <- map(vars,~loocv_logit(data = classification_data,formula = str_c("dem ~ ",.)))
+
+full_formula <- "dem ~ average_score + anger + anticipation + disgust + fear + joy + negative + positive + sadness + surprise + trust + n_sentiment_words"
+
+full_model <- classification_data %>% 
+  glm("dem ~ average_score + anger + anticipation + disgust + fear + joy + negative + positive + sadness + surprise + trust + n_sentiment_words",
+      data = .,family = binomial(link = "logit"))
+
+loo_error_rate_full <- loocv_logit(classification_data,full_formula)
+```
+
+
+```{r logit_results}
+dem_rate <- ((sum(classification_data$dem)/nrow(classification_data)*100)) %>% round(1)
+rep_rate <- (100 - (sum(classification_data$dem)/nrow(classification_data)*100)) %>% round(1)
+  
+results <- data.frame(model = c(vars),stringsAsFactors = F) %>% 
+  mutate(model = model %>% str_replace_all("_"," ") %>% str_to_title,
+         model = case_when(model == "N Sentiment Words" ~ "Number of Sentiment Words",
+                           model == "Average Score" ~ "Email Sentiment",
+                           TRUE ~ model))
+
+get_results <- function(model,coef,digits= 3){
+  summary <- model %>% summary
+  est <- summary$coefficients[coef,1] %>% round(digits)
+  se <- summary$coefficients[coef,2] %>% round(digits)
+  p <- summary$coefficients[coef,4]
+
+  stars <- case_when(p < 0.001 ~ "***",
+                     p < 0.01 ~ "**",
+                     p < 0.05 ~ "*",
+                     TRUE ~ "")
+  
+  str_c(est,stars,"<br>(",se,")")
+}
+
+results$coefficient <- map(univariate_models,~get_results(.,coef = 2)) %>% unlist
+results$intercept <- map(univariate_models,~get_results(.,coef = 1)) %>% unlist
+results$loocv_error_rate <- ((loo_error_rates %>% unlist %>% round(3))*100) %>% str_c("%")
+
+kable(results,format = kable_output_format,align = "lllc",escape = FALSE,
+      col.names = c("Model","Coefficient","Intercept","LOOCV Error Rate")) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F) %>% 
+  footnote(general = "* p<0.05; ** p<0.01; *** p<0.001")
+```
+
+While the error rates appear low, they actually are not much better than random chance. Of the `r nrow(classification_data) %>% format_number()` emails with sentiment data, `r dem_rate`\% of them are from democratic campaigns. So if you just guessed that every email was Democratic, you would be wrong `r rep_rate`\% of the time. An equivalent interpretation is that if you randomly classified `r dem_rate`\% of the emails as Democratic and the rest as Republican, you would expect to have an error rate of `r rep_rate`\%. Even for some of the sentiments with statistically significant coefficients, their prediction accuracy is no better than random chance. The full model, however, does have some predictive power. The results are shown below. 
+
+```{r full_results}
+results_full <- data.frame(model = c(vars,"Intercept"),stringsAsFactors = F) %>% 
+  mutate(model = model %>% str_replace_all("_"," ") %>% str_to_title,
+         model = case_when(model == "N Sentiment Words" ~ "Number of Sentiment Words",
+                           model == "Average Score" ~ "Email Sentiment",
+                           TRUE ~ model))
+
+results_full$coefficient <- get_results(full_model,c(vars,"(Intercept)"))
+
+kable(results_full,format = kable_output_format,escape = FALSE,
+      col.names = c("Variable","Coefficient")) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F) %>% 
+  footnote(general = "* p<0.05; ** p<0.01; *** p<0.001. LOOCV Error Rate: " %>% 
+             str_c((loo_error_rate_full*100) %>% round(1),"%"))
+```
+
+The error rate for the full model is `r  str_c((loo_error_rate_full*100) %>% round(1),"%")`, an improvement over random chance by a factor of about 2/3. By using all of the sentiments together, emails can be classified better than by simply guessing that every email is democratic. 
+
+Emails with higher positive average sentiment, or more sadness and anger words are more likely to be democratic emails. Emails with more trust, fear, negative, positive, disgust, or joy words are more likely to be from republican candidates. Democrats might tend to describe the previous Congress with words that convey anger or sadness, while Republicans would use positive, joy, or trust words. The fact that Republican emails also use more disgust and fear words is evidence against that explanation though, or at least is evidence that the truth is more complicated. 
+
+#Further Work
+
+The classification and cross-validation methods that I used are certainly simpler versions of where the state of the art is. I would not be surprised if more information could be extracted from the text or the sentiments with more sophisticated tools. Something that I haven't explored, but could be quite interesting, is using the text itself rather than the sentiment to classify emails. The difficulty is that text data is very high dimensional: there were far more unique words used than emails sent, so you could get a perfect in-sample prediction if the explanatory variables are just indicators for the presence or absence of each word. There are also some words that are very predictive, but not predictive in an "interesting" way. Emails always mention the candidate's name, frequently include a link to the campaign's donation page or list their mailing address. Clearly, you can immediately know the party of the sender from those features. But those predictions are also not very interesting. What I would like to do is extract from the emails some measures of the general language each party uses and then use those features to classify the email. If those features classify accurately, then there is evidence for divergence in how the parties speak to their supporters. That result has implications for trying to convince people to change their political beliefs. Presenting convincing arguments to partisans of each party probably requires speaking their language in some sense, and campaign emails are potentially a useful data source for learning that language.  
